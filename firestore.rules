@@ -1,0 +1,235 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isSelf(uid) { return isSignedIn() && request.auth.uid == uid; }
+
+    // Users — each user can read any profile, write only their own
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isSelf(userId);
+
+      match /savedItems/{itemId} {
+        allow read, write: if isSelf(userId);
+      }
+      match /savedRestaurants/{restId} {
+        allow read, write: if isSelf(userId);
+      }
+      match /rideHistory/{rideId} {
+        allow read, write: if isSelf(userId);
+      }
+      match /reviews/{reviewId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && request.auth.uid == request.resource.data.reviewerId;
+      }
+    }
+
+    // ── Phase 3: OTP Verification and Trust Layer (NEW) ──────────────────────
+    match /verificationRequests/{userId} {
+      // Users can only read and write their own verification attempts
+      allow read, write: if isSelf(userId);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Phase 1: Provider System (NEW) ───────────────────────────────────────
+
+    match /providerListings/{listingId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.ownerId;
+      allow delete: if isSignedIn() && request.auth.uid == resource.data.ownerId;
+      // Owner can update freely. Any user can increment viewCount/inquiryCount when viewing/inquiring.
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.ownerId
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewCount', 'inquiryCount'])
+      );
+    }
+
+    match /inquiries/{inquiryId} {
+      // Both student and provider need read/update access (for read receipts, chat linkage)
+      allow read, update: if isSignedIn() && (
+        request.auth.uid == resource.data.studentId || request.auth.uid == resource.data.providerId
+      );
+      // Only students initiate inquiries
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.studentId;
+    }
+
+    match /inquiryChats/{chatId} {
+      // Either side can create or view the chat thread
+      allow read, update, delete: if isSignedIn() && (
+        request.auth.uid == resource.data.studentId || request.auth.uid == resource.data.providerId
+      );
+      allow create: if isSignedIn() && (
+        request.auth.uid == request.resource.data.studentId || request.auth.uid == request.resource.data.providerId
+      );
+      
+      match /messages/{msgId} {
+        allow read, create: if isSignedIn() && (
+          request.auth.uid == get(/databases/$(database)/documents/inquiryChats/$(chatId)).data.studentId
+          || request.auth.uid == get(/databases/$(database)/documents/inquiryChats/$(chatId)).data.providerId
+        );
+      }
+    }
+    
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Marketplace — `root` is a fixed namespace document so that items/wanted/chats
+    // subcollection paths produce valid 4-segment document paths.
+    match /marketplace/root/items/{itemId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.sellerId;
+      allow delete: if isSignedIn() && request.auth.uid == resource.data.sellerId;
+      // Sellers can update their listings freely. Any signed-in user may update if the
+      // only changed fields are view/save counters (used by buyer-side fire-and-forget
+      // FieldValue.increment calls in MarketplaceRepository).
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.sellerId
+        || request.resource.data.diff(resource.data)
+             .affectedKeys().hasOnly(['viewCount', 'saveCount'])
+      );
+    }
+    match /marketplace/root/wanted/{postId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.buyerId;
+      allow update, delete: if isSignedIn() && request.auth.uid == resource.data.buyerId;
+    }
+    match /marketplace/root/chats/{chatId} {
+      // Split so create uses request.resource.data (resource doesn't exist yet on create).
+      allow read: if isSignedIn() &&
+        (request.auth.uid == resource.data.buyerId || request.auth.uid == resource.data.sellerId);
+      allow create: if isSignedIn() &&
+        (request.auth.uid == request.resource.data.buyerId
+         || request.auth.uid == request.resource.data.sellerId);
+      allow update, delete: if isSignedIn() &&
+        (request.auth.uid == resource.data.buyerId || request.auth.uid == resource.data.sellerId);
+      match /messages/{msgId} {
+        allow read, create: if isSignedIn() &&
+          (request.auth.uid == get(/databases/$(database)/documents/marketplace/root/chats/$(chatId)).data.buyerId
+           || request.auth.uid == get(/databases/$(database)/documents/marketplace/root/chats/$(chatId)).data.sellerId);
+      }
+    }
+
+    // Roommate — `root` namespace doc keeps subcollection paths valid (4 segments).
+    match /roommate/root/profiles/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isSelf(userId);
+    }
+    match /roommate/root/connections/{connId} {
+      allow read, create, update: if isSignedIn() &&
+        (request.auth.uid == resource.data.requesterId || request.auth.uid == resource.data.receiverId
+         || request.auth.uid == request.resource.data.requesterId);
+    }
+    match /roommate/root/groups/{groupId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.creatorId;
+      // Allow: creator, members, existing pending-requesters, or a user adding themselves
+      // to pendingRequestIds (the request-to-join path).
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.creatorId
+        || request.auth.uid in resource.data.memberIds
+        || request.auth.uid in resource.data.pendingRequestIds
+        || request.auth.uid in request.resource.data.pendingRequestIds
+      );
+    }
+    match /roommate/root/chats/{chatId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.memberIds;
+      allow create: if isSignedIn() && request.auth.uid in request.resource.data.memberIds;
+      allow update: if isSignedIn() && request.auth.uid in resource.data.memberIds;
+      match /messages/{msgId} {
+        allow read, create: if isSignedIn() &&
+          request.auth.uid in get(/databases/$(database)/documents/roommate/root/chats/$(chatId)).data.memberIds;
+      }
+    }
+
+    // Rides — `root` namespace doc keeps subcollection paths valid (4 segments).
+    match /rides/root/requests/{rideId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.requesterId;
+      // Allow: (1) the requester, (2) an existing passenger, or
+      // (3) a user adding themselves to confirmedPassengerIds (the join-ride path).
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.requesterId
+        || request.auth.uid in resource.data.confirmedPassengerIds
+        || request.auth.uid in request.resource.data.confirmedPassengerIds
+      );
+    }
+    match /rides/root/drivers/{driverId} {
+      allow read: if isSignedIn();
+      allow write: if false; // Only admin (Phase 3.4)
+    }
+    match /rides/root/reviews/{reviewId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.reviewerId;
+    }
+    match /rides/root/predefinedRoutes/{routeId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Finance / Bills (Phase 1.4) — `root` namespace doc keeps the path valid (4 segments).
+    match /finance/root/bills/{billId} {
+      allow read, write: if isSignedIn() && request.auth.uid == resource.data.creatorId;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.creatorId;
+    }
+
+    // Spending (Phase 2.2)
+    match /spendingTransactions/{txId} {
+      allow read, write: if isSignedIn() && request.auth.uid == resource.data.userId;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId;
+    }
+    match /spendingCategories/{catId} {
+      allow read, write: if isSignedIn() && request.auth.uid == resource.data.userId;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId;
+    }
+    match /spendingBudgets/{budgetId} {
+      allow read, write: if isSignedIn() && request.auth.uid == resource.data.userId;
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId;
+    }
+
+    // Restaurants (Phase 2.1)
+    match /restaurants/{restId} {
+      allow read: if isSignedIn();
+      allow update: if isSignedIn(); // Allow users to update rating counts and visit counts
+      allow create, delete: if false; // Admin only
+    }
+    match /restaurantRatings/{ratingId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn(); // Allow creating and updating ratings
+    }
+
+    // Lost and Found
+    match /lostFound/{itemId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.reportedByUserId;
+      allow delete: if isSignedIn() && request.auth.uid == resource.data.reportedByUserId;
+      // Allow updates from owner, or from anyone if they are just updating viewCount, claimCount, or expiring an item.
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.reportedByUserId
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewCount'])
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimCount'])
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+      );
+
+      match /claims/{claimId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && request.auth.uid == request.resource.data.claimantId;
+      }
+    }
+
+    // Phase 0 collections — pre-existing features that Phase 1 doesn't touch. Granting
+    // authenticated-user access keeps them working as they did before the Phase 0.8 rules
+    // rollout. Phase 3.7 Security Rules Audit will tighten these per feature.
+    match /listings/{document=**} { allow read, write: if isSignedIn(); }
+    match /messes/{document=**}    { allow read, write: if isSignedIn(); }
+    match /services/{document=**}  { allow read, write: if isSignedIn(); }
+    match /expenses/{document=**}  { allow read, write: if isSignedIn(); }
+    match /colleges/{document=**}  { allow read, write: if isSignedIn(); }
+    match /buddyPairs/{document=**} { allow read, write: if isSignedIn(); }
+    match /forums/{document=**}    { allow read, write: if isSignedIn(); }
+    match /events/{document=**}    { allow read, write: if isSignedIn(); }
+    match /alerts/{document=**}    { allow read, write: if isSignedIn(); }
+    match /healthContacts/{document=**} { allow read, write: if isSignedIn(); }
+    match /reviews/{document=**}   { allow read, write: if isSignedIn(); }
+  }
+}

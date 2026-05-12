@@ -1,0 +1,27 @@
+package com.nestmate.app.data.model
+
+data class RoommateProfile(
+    val userId: String = "",
+    val name: String = "",
+    val age: Int = 0,
+    val gender: Gender = Gender.PREFER_NOT_TO_SAY,
+    val collegeName: String = "",
+    val course: String = "",
+    val preferredLocation: String = "",
+    val minBudget: Long = 0L,
+    val maxBudget: Long = 0L,
+    val roomTypePreference: RoomType = RoomType.SHARED_ROOM,
+    val sleepingSchedule: SleepSchedule = SleepSchedule.NIGHT_OWL,
+    val cleanlinessLevel: Int = 3,
+    val studyHabits: StudyHabit = StudyHabit.QUIET_STUDIER,
+    val foodPreference: FoodPreference = FoodPreference.VEG,
+    val smokingHabit: HabitPreference = HabitPreference.NO,
+    val drinkingHabit: HabitPreference = HabitPreference.NO,
+    val bio: String = "",
+    val photoUrl: String? = null,
+    val isActivelySearching: Boolean = true,
+    val lastActiveAt: Long = 0L,
+    val blockedUserIds: List<String> = emptyList(),
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L,
+)

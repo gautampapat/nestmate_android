@@ -1,0 +1,37 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# --- Added for Privacy & Security ---
+# Google Services
+google-services.json
+
+# Keystore files
+*.jks
+*.keystore
+
+# Environments
+.env
+.env.*
+
+# Ignore all .idea to be safe, but typically standard is to ignore the whole thing
+.idea/
+
+# macOS
+.DS_Store
+
+# Ignore scripts/docs that aren't necessary for the public repo
+fix_colors.py
+project_steps/
